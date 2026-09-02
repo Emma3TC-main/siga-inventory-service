@@ -1,0 +1,1 @@
+# siga-inventory-service
