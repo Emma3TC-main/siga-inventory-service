@@ -1,0 +1,300 @@
+openapi: 3.0.3
+info:
+  title: SIGA Inventory API
+  version: 1.2.0
+  description: Transactional inventory, locations, traceability, movements, authorizations and physical counts.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /inventory:
+    get:
+      summary: Query stock consolidated/by location, lot or asset
+      responses:
+        '200':
+          description: Inventory page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryPage' }
+  /locations:
+    get:
+      summary: List location hierarchy
+      responses: { '200': { description: Locations } }
+    post:
+      summary: Create location
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationRequest' }
+      responses: { '201': { description: Created } }
+  /lots:
+    get:
+      summary: Search lots/heat numbers/expiry
+      responses: { '200': { description: Lots } }
+  /assets:
+    get:
+      summary: Search serialised assets
+      responses: { '200': { description: Assets } }
+  /movements:
+    get:
+      summary: List/filter movement history
+      responses: { '200': { description: Movements } }
+    post:
+      summary: Create movement draft with one or more details
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MovementRequest' }
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /movements/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Get movement
+      responses:
+        '200':
+          description: Movement
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResponse' }
+  /movements/{id}/submit:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      summary: Submit draft and evaluate sensitivity
+      responses:
+        '200':
+          description: Submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /movements/{id}/authorize:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      summary: Approve sensitive movement after step-up
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationDecision' }
+      responses:
+        '200': { description: Authorized }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /movements/{id}/reject:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      summary: Reject sensitive movement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorizationDecision' }
+      responses: { '200': { description: Rejected } }
+  /movements/{id}/cancel:
+    parameters: [ { $ref: '#/components/parameters/Id' } ]
+    post:
+      summary: Cancel before confirmation when policy permits
+      responses:
+        '200': { description: Cancelled }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /movements/{id}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      summary: Confirm atomically using locks, revalidation and local Outbox
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovementResponse' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /counts:
+    post:
+      summary: Register physical count without directly mutating stock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalCountRequest' }
+      responses:
+        '201':
+          description: Count recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Conflict:
+      description: Stock/state/idempotency/domain conflict
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+  schemas:
+    Problem:
+      type: object
+      properties:
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        correlationId: { type: string, format: uuid }
+    MovementType:
+      type: string
+      enum: [ENTRY, EXIT, TRANSFER, ADJUST_POSITIVE, ADJUST_NEGATIVE]
+    MovementStatus:
+      type: string
+      enum: [DRAFT, PENDING_AUTHORIZATION, AUTHORIZED, CONFIRMED, REJECTED, CANCELLED]
+    MovementRequest:
+      type: object
+      required: [movementType, details]
+      properties:
+        movementType: { $ref: '#/components/schemas/MovementType' }
+        requestedByUserId: { type: string, format: uuid }
+        costCenterCode: { type: string }
+        costCenterNameSnapshot: { type: string }
+        supplierId: { type: string, format: uuid, description: Required by business rule for external supplier receipts; validated against local supplier_ref }
+        referenceDocType: { type: string }
+        referenceDocNumber: { type: string }
+        reason: { type: string }
+        notes: { type: string }
+        details:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MovementDetailRequest' }
+    MovementDetailRequest:
+      type: object
+      required: [productId, enteredQuantity, unitCode]
+      properties:
+        productId: { type: string, format: uuid }
+        enteredQuantity: { type: number, exclusiveMinimum: 0 }
+        unitCode: { type: string }
+        originLocationId: { type: string, format: uuid }
+        destinationLocationId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        originalCurrency: { type: string, minLength: 3, maxLength: 3, default: PEN }
+        originalUnitCost: { type: number, minimum: 0 }
+        exchangeRate: { type: number, exclusiveMinimum: 0 }
+        exchangeRateDate: { type: string, format: date }
+        exchangeRateSource: { type: string, example: MANUAL }
+    MovementDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/MovementDetailRequest'
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            lineNumber: { type: integer }
+            conversionFactor: { type: number }
+            stockQuantity: { type: number }
+            baseUnitCostPen: { type: number }
+            appliedAvgCostPen: { type: number }
+    MovementResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        movementCode: { type: string }
+        movementType: { $ref: '#/components/schemas/MovementType' }
+        status: { $ref: '#/components/schemas/MovementStatus' }
+        registeredByUserId: { type: string, format: uuid }
+        requestedByUserId: { type: string, format: uuid }
+        costCenterCode: { type: string }
+        costCenterNameSnapshot: { type: string }
+        supplierId: { type: string, format: uuid }
+        supplierNameSnapshot: { type: string }
+        supplierTaxIdSnapshot: { type: string }
+        sensitive: { type: boolean }
+        sensitivityReason: { type: string }
+        details:
+          type: array
+          items: { $ref: '#/components/schemas/MovementDetailResponse' }
+        createdAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time }
+        confirmedAt: { type: string, format: date-time }
+    AuthorizationDecision:
+      type: object
+      properties:
+        reason: { type: string }
+        stepUpToken: { type: string, description: Proof of recent privileged MFA step-up }
+    LocationRequest:
+      type: object
+      required: [code, name, locationType]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        locationType:
+          type: string
+          enum: [ALMACEN, PATIO, ZONA, PASILLO, RACK, NIVEL, POSICION, TALLER, RECEPCION, CUARENTENA, DESPACHO]
+        parentId: { type: string, format: uuid }
+    StockItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        locationId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        quantity: { type: number, minimum: 0 }
+        avgCostPen: { type: number, minimum: 0 }
+    InventoryPage:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/StockItem' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+    PhysicalCountLineRequest:
+      type: object
+      required: [productId, countedQuantity]
+      properties:
+        productId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        countedQuantity: { type: number, minimum: 0 }
+    PhysicalCountRequest:
+      type: object
+      required: [locationId, lines]
+      properties:
+        locationId: { type: string, format: uuid }
+        notes: { type: string }
+        lines:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/PhysicalCountLineRequest' }
+    PhysicalCountResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [DRAFT, IN_PROGRESS, COMPLETED, CANCELLED] }
+        differences:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string, format: uuid }
+              systemQuantity: { type: number }
+              countedQuantity: { type: number }
+              differenceQuantity: { type: number }
