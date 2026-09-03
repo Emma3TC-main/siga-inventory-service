@@ -1,0 +1,36 @@
+-- TODO: Pegar aquí los INSERT iniciales del esquema 'inventory'.
+
+-- Inventory local Catalog projection (normally populated by ProductCreated/Updated events).
+INSERT INTO inventory.supplier_ref (supplier_id, code, tax_id, business_name, active, source_version) VALUES
+('70000000-0000-0000-0000-000000000001','PRV-001','20123456789','Suministros Industriales Andinos S.A.C.',true,1)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO inventory.product_ref(product_id,sku,product_type,storage_unit_code,base_unit_code,min_stock,
+ requires_lot,requires_heat_number,requires_serial,requires_expiry,source_version) VALUES
+('22000000-0000-0000-0000-000000000001','A36-PL-10','MATERIAL','T','KG',500,true,true,false,false,0),
+('22000000-0000-0000-0000-000000000002','ROD-6205','REPUESTO','CAJA','PZA',20,true,false,false,false,0),
+('22000000-0000-0000-0000-000000000003','LUB-H46','INSUMO','L','L',100,true,false,false,true,0),
+('22000000-0000-0000-0000-000000000004','EXC-320','MAQUINARIA','PZA','PZA',0,false,false,true,false,0);
+
+INSERT INTO inventory.product_unit_conversion_ref(product_id,from_unit_code,to_unit_code,factor) VALUES
+('22000000-0000-0000-0000-000000000001','T','KG',1000),
+('22000000-0000-0000-0000-000000000002','CAJA','PZA',10);
+
+INSERT INTO inventory.location(id,code,name,location_type,parent_id) VALUES
+('30000000-0000-0000-0000-000000000001','ALM-01','Almacén principal','ALMACEN',NULL),
+('30000000-0000-0000-0000-000000000002','ZONA-A','Zona de materiales','ZONA','30000000-0000-0000-0000-000000000001'),
+('30000000-0000-0000-0000-000000000003','POS-A01','Posición A01','POSICION','30000000-0000-0000-0000-000000000002'),
+('30000000-0000-0000-0000-000000000004','PATIO-01','Patio de maquinaria','PATIO',NULL),
+('30000000-0000-0000-0000-000000000005','POS-M01','Posición maquinaria M01','POSICION','30000000-0000-0000-0000-000000000004');
+
+INSERT INTO inventory.lot(id,product_id,lot_number,heat_number,received_at,status) VALUES
+('31000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','LOT-A36-001','COL-2026-001',CURRENT_DATE,'ACTIVE'),
+('31000000-0000-0000-0000-000000000002','22000000-0000-0000-0000-000000000002','LOT-6205-001',NULL,CURRENT_DATE,'ACTIVE');
+
+INSERT INTO inventory.asset(id,product_id,asset_code,serial_number,brand,model,operational_status) VALUES
+('32000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000004','MAQ-0001','SER-DEMO-EXC-001','Demo','320','OPERATIVO');
+
+INSERT INTO inventory.stock_balance(id,product_id,location_id,lot_id,asset_id,quantity,avg_cost_pen) VALUES
+('33000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','30000000-0000-0000-0000-000000000003','31000000-0000-0000-0000-000000000001',NULL,2500,4.25),
+('33000000-0000-0000-0000-000000000002','22000000-0000-0000-0000-000000000002','30000000-0000-0000-0000-000000000003','31000000-0000-0000-0000-000000000002',NULL,50,35.00),
+('33000000-0000-0000-0000-000000000003','22000000-0000-0000-0000-000000000004','30000000-0000-0000-0000-000000000005',NULL,'32000000-0000-0000-0000-000000000001',1,450000);
