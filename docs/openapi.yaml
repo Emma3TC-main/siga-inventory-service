@@ -11,6 +11,15 @@ paths:
   /inventory:
     get:
       summary: Query stock consolidated/by location, lot or asset
+      description: Requires INVENTORY_READ. Fixed order is stock balance id ASC; page and size allow a complete reconciliation without cross-schema reads.
+      x-required-permission: INVENTORY_READ
+      parameters:
+        - { in: query, name: productId, schema: { type: string, format: uuid } }
+        - { in: query, name: locationId, schema: { type: string, format: uuid } }
+        - { in: query, name: lotId, schema: { type: string, format: uuid } }
+        - { in: query, name: assetId, schema: { type: string, format: uuid } }
+        - { in: query, name: page, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: size, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
       responses:
         '200':
           description: Inventory page
@@ -19,24 +28,426 @@ paths:
               schema: { $ref: '#/components/schemas/InventoryPage' }
   /locations:
     get:
-      summary: List location hierarchy
-      responses: { '200': { description: Locations } }
+      summary: List locations
+      description: Returns a flat collection ordered by code ASC and id ASC. Requires INVENTORY_READ or LOCATION_MANAGE.
+      x-required-permission: INVENTORY_READ OR LOCATION_MANAGE
+      parameters:
+        - name: active
+          in: query
+          required: false
+          description: Omitted or true returns active locations; false returns inactive locations; all returns both.
+          schema:
+            type: string
+            enum: ['true', 'false', all]
+            default: 'true'
+      responses:
+        '200':
+          description: Locations matching the active filter
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LocationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       summary: Create location
+      description: Creates an active location at version 0. Code is globally unique, case-sensitive and immutable after creation. Requires LOCATION_MANAGE.
+      x-required-permission: LOCATION_MANAGE
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/LocationRequest' }
-      responses: { '201': { description: Created } }
+            schema: { $ref: '#/components/schemas/LocationCreateRequest' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              description: URI of the created location
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/LocationConflict' }
+  /locations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Get an active or inactive location
+      description: Requires INVENTORY_READ or LOCATION_MANAGE.
+      x-required-permission: INVENTORY_READ OR LOCATION_MANAGE
+      responses:
+        '200':
+          description: Location detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LocationNotFound' }
+    put:
+      summary: Replace editable location fields
+      description: Code and active state are not editable through PUT. expectedVersion is checked before no-op evaluation. Requires LOCATION_MANAGE.
+      x-required-permission: LOCATION_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationUpdateRequest' }
+      responses:
+        '200':
+          description: Updated or current location when the version-valid request is a no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LocationNotFound' }
+        '409': { $ref: '#/components/responses/LocationConflict' }
+  /locations/{id}/deactivate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Deactivate a location
+      description: No cascade. Active descendants, positive stock, or open physical counts on the target/descendants block the operation. Requires LOCATION_MANAGE.
+      x-required-permission: LOCATION_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationVersionRequest' }
+      responses:
+        '200':
+          description: Deactivated or already inactive location for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LocationNotFound' }
+        '409': { $ref: '#/components/responses/LocationConflict' }
+  /locations/{id}/reactivate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Reactivate a location
+      description: Retains the same id and code and requires an active parent when parentId is present. Requires LOCATION_MANAGE.
+      x-required-permission: LOCATION_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationVersionRequest' }
+      responses:
+        '200':
+          description: Reactivated or already active location for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LocationResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LocationNotFound' }
+        '409': { $ref: '#/components/responses/LocationConflict' }
   /lots:
     get:
-      summary: Search lots/heat numbers/expiry
-      responses: { '200': { description: Lots } }
+      summary: List operational lots for movement entry and adjustment selectors
+      description: Returns ACTIVE lots that have no expiry or expire on/after the current UTC date. Quantities are aggregated from stock_balance; locationId scopes both quantity and availability. Requires INVENTORY_READ.
+      x-required-permission: INVENTORY_READ
+      parameters:
+        - name: productId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: locationId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: availableOnly
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Operational lots ordered by lotNumber, heatNumber and id, with null values last
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createLot
+      summary: Register a lot without creating stock
+      description: Creates version 0 as ACTIVE, or EXPIRED when expiresAt is before the current UTC date. Product traceability flags are validated from product_ref. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotCreateRequest' }
+      responses:
+        '201':
+          description: Lot registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/LotConflict' }
+  /admin/lots:
+    get:
+      operationId: listAdminLots
+      summary: List lots for administration
+      description: Includes every lifecycle status and derived stock totals. Fixed order is createdAt DESC, id DESC. Requires INVENTORY_READ or TRACEABILITY_MANAGE.
+      x-required-permission: INVENTORY_READ OR TRACEABILITY_MANAGE
+      parameters:
+        - { in: query, name: productId, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { $ref: '#/components/schemas/LotStatus' } }
+        - { in: query, name: expired, schema: { type: boolean } }
+        - { in: query, name: locationId, schema: { type: string, format: uuid } }
+        - { in: query, name: page, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: size, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Administrative lot page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotAdminPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /lots/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getLot
+      summary: Get an operational or non-operational lot
+      description: Quantity and location distribution are derived from stock_balance. Requires INVENTORY_READ or TRACEABILITY_MANAGE.
+      x-required-permission: INVENTORY_READ OR TRACEABILITY_MANAGE
+      responses:
+        '200':
+          description: Lot detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotAdminResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LotNotFound' }
+    put:
+      operationId: updateLot
+      summary: Replace editable lot dates
+      description: Product, lotNumber, heatNumber and status are immutable through PUT. expectedVersion is checked before no-op evaluation. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotUpdateRequest' }
+      responses:
+        '200':
+          description: Updated or current lot for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LotNotFound' }
+        '409': { $ref: '#/components/responses/LotConflict' }
+  /lots/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: changeLotStatus
+      summary: Apply an allowed manual lot status transition
+      description: EXPIRED and DEPLETED are system-derived and cannot be selected. Returning DEPLETED to ACTIVE requires zero aggregate quantity and a valid date. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotStatusRequest' }
+      responses:
+        '200':
+          description: Changed or current lot for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/LotNotFound' }
+        '409': { $ref: '#/components/responses/LotConflict' }
   /assets:
     get:
-      summary: Search serialised assets
-      responses: { '200': { description: Assets } }
+      summary: List operational serialised assets for movement selectors
+      description: Returns only OPERATIVO assets. UNASSIGNED means no positive stock row; IN_STOCK means exactly one positive row with quantity 1. Requires INVENTORY_READ.
+      x-required-permission: INVENTORY_READ
+      parameters:
+        - name: productId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: locationId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: lotId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: availability
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/AssetAvailability' }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Operational assets ordered by assetCode and id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: registerAsset
+      summary: Register a serialized asset without creating stock
+      description: Creates an OPERATIVO asset at version 0 for an active product_ref with requiresSerial=true. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetCreateRequest' }
+      responses:
+        '201':
+          description: Asset registered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/AssetConflict' }
+  /admin/assets:
+    get:
+      operationId: listAdminAssets
+      summary: List serialized assets for administration
+      description: Includes every lifecycle status. Omitted availability means all assets. Fixed order is createdAt DESC, id DESC. Requires INVENTORY_READ or TRACEABILITY_MANAGE.
+      x-required-permission: INVENTORY_READ OR TRACEABILITY_MANAGE
+      parameters:
+        - { in: query, name: productId, schema: { type: string, format: uuid } }
+        - { in: query, name: operationalStatus, schema: { $ref: '#/components/schemas/AssetOperationalStatus' } }
+        - { in: query, name: availability, schema: { $ref: '#/components/schemas/AssetAvailability' } }
+        - { in: query, name: locationId, schema: { type: string, format: uuid } }
+        - { in: query, name: lotId, schema: { type: string, format: uuid } }
+        - { in: query, name: page, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: size, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Administrative asset page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetAdminPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /assets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getAsset
+      summary: Get an operational or non-operational asset
+      description: Current location and lot are derived from the single positive stock balance. Requires INVENTORY_READ or TRACEABILITY_MANAGE.
+      x-required-permission: INVENTORY_READ OR TRACEABILITY_MANAGE
+      responses:
+        '200':
+          description: Asset detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetAdminResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AssetNotFound' }
+    put:
+      operationId: updateAsset
+      summary: Replace editable asset metadata
+      description: Product, assetCode, serialNumber and status are immutable through PUT. expectedVersion is checked before no-op evaluation. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetUpdateRequest' }
+      responses:
+        '200':
+          description: Updated or current asset for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AssetNotFound' }
+        '409': { $ref: '#/components/responses/AssetConflict' }
+  /assets/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: changeAssetStatus
+      summary: Apply an allowed manual asset status transition
+      description: EN_TRANSITO is reserved for a future asynchronous dispatch/receipt flow. FUERA_SERVICIO is terminal and requires no positive stock. Requires TRACEABILITY_MANAGE.
+      x-required-permission: TRACEABILITY_MANAGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetStatusRequest' }
+      responses:
+        '200':
+          description: Changed or current asset for a version-valid no-op
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetAdminResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/AssetNotFound' }
+        '409': { $ref: '#/components/responses/AssetConflict' }
   /movements:
     get:
       summary: List/filter movement history
@@ -69,7 +480,11 @@ paths:
   /movements/{id}/submit:
     parameters: [ { $ref: '#/components/parameters/Id' } ]
     post:
-      summary: Submit draft and evaluate sensitivity
+      summary: Submit draft and evaluate sensitivity and actor capability
+      description: >-
+        The movement becomes PENDING_AUTHORIZATION when it is sensitive or the authenticated actor lacks
+        MOVEMENT_AUTHORIZE. A non-sensitive movement submitted by an actor with MOVEMENT_AUTHORIZE remains
+        DRAFT and may be confirmed directly.
       responses:
         '200':
           description: Submitted
@@ -80,7 +495,8 @@ paths:
   /movements/{id}/authorize:
     parameters: [ { $ref: '#/components/parameters/Id' } ]
     post:
-      summary: Approve sensitive movement after step-up
+      summary: Approve pending movement after step-up
+      description: Requires bearer JWT with MOVEMENT_AUTHORIZE, amr containing otp and auth_time no older than 300 seconds. The authenticated JWT subject is the authorizer and must differ from registeredByUserId (maker-checker).
       requestBody:
         required: true
         content:
@@ -92,7 +508,8 @@ paths:
   /movements/{id}/reject:
     parameters: [ { $ref: '#/components/parameters/Id' } ]
     post:
-      summary: Reject sensitive movement
+      summary: Reject pending movement after step-up
+      description: Requires the same MOVEMENT_AUTHORIZE, recent OTP and maker-checker rules as authorize.
       requestBody:
         required: true
         content:
@@ -112,6 +529,7 @@ paths:
       - $ref: '#/components/parameters/IdempotencyKey'
     post:
       summary: Confirm atomically using locks, revalidation and local Outbox
+      description: A DRAFT movement can be confirmed only by an actor with MOVEMENT_AUTHORIZE and only when it is non-sensitive. An AUTHORIZED movement follows the existing create/adjust permission contract.
       responses:
         '200':
           description: Confirmed
@@ -120,8 +538,28 @@ paths:
               schema: { $ref: '#/components/schemas/MovementResponse' }
         '409': { $ref: '#/components/responses/Conflict' }
   /counts:
+    get:
+      summary: List physical counts
+      description: Requires INVENTORY_COUNT. Fixed order is createdAt DESC, id DESC.
+      x-required-permission: INVENTORY_COUNT
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 0, default: 0 } }
+        - { in: query, name: size, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: Physical count page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
-      summary: Register physical count without directly mutating stock
+      summary: Create physical count and capture the location stock snapshot
+      description: Requires INVENTORY_COUNT. Creates DRAFT and never mutates stock. The authenticated JWT subject is the creator.
+      x-required-permission: INVENTORY_COUNT
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -129,10 +567,130 @@ paths:
             schema: { $ref: '#/components/schemas/PhysicalCountRequest' }
       responses:
         '201':
-          description: Count recorded
+          description: Draft count with its immutable system-quantity snapshot
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /counts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      summary: Get physical count detail
+      description: Requires INVENTORY_COUNT.
+      x-required-permission: INVENTORY_COUNT
+      responses:
+        '200':
+          description: Physical count and snapshot lines
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /counts/{id}/lines:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      summary: Record an unexpected stock dimension absent from the creation snapshot
+      description: Requires INVENTORY_COUNT. The server records systemQuantity zero and derives the counter from JWT sub.
+      x-required-permission: INVENTORY_COUNT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnexpectedPhysicalCountLineRequest' }
+      responses:
+        '200':
+          description: Count with the added observation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /counts/{id}/lines/{lineId}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: lineId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      summary: Replace the counted observation of one snapshot line
+      description: Requires INVENTORY_COUNT. First successful capture changes DRAFT to IN_PROGRESS.
+      x-required-permission: INVENTORY_COUNT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalCountLineUpdateRequest' }
+      responses:
+        '200':
+          description: Updated count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /counts/{id}/close:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      summary: Complete a fully captured physical count
+      description: Requires INVENTORY_COUNT. Closing preserves discrepancies but does not reread or mutate stock and does not create adjustments.
+      x-required-permission: INVENTORY_COUNT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalCountCommandRequest' }
+      responses:
+        '200':
+          description: Completed count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /counts/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      summary: Cancel an open physical count
+      description: Requires INVENTORY_COUNT. Only DRAFT or IN_PROGRESS can be cancelled.
+      x-required-permission: INVENTORY_COUNT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PhysicalCountCancelRequest' }
+      responses:
+        '200':
+          description: Cancelled count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -148,17 +706,49 @@ components:
       required: true
       schema: { type: string, format: uuid }
   responses:
+    BadRequest:
+      description: Invalid query parameters or body (`VALIDATION_ERROR`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthorized:
+      description: Missing or invalid bearer token (`AUTH_INVALID`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: Authenticated principal lacks the required permission (`AUTH_FORBIDDEN`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    NotFound:
+      description: Requested resource was not found
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
     Conflict:
       description: Stock/state/idempotency/domain conflict
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    LocationNotFound:
+      description: Location does not exist (`LOCATION_NOT_FOUND`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    LocationConflict:
+      description: Location conflict (`DATA_CONFLICT`, `VERSION_CONFLICT`, `LOCATION_HIERARCHY_CONFLICT`, `LOCATION_HAS_ACTIVE_DESCENDANTS`, `LOCATION_HAS_STOCK`, `LOCATION_IN_USE` or `LOCATION_INACTIVE`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    LotNotFound:
+      description: Lot does not exist (`LOT_NOT_FOUND`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    LotConflict:
+      description: Lot conflict (`DATA_CONFLICT`, `VERSION_CONFLICT`, `LOT_STATUS_CONFLICT` or `LOT_NOT_AVAILABLE`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    AssetNotFound:
+      description: Asset does not exist (`ASSET_NOT_FOUND`)
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    AssetConflict:
+      description: Asset conflict (`DATA_CONFLICT`, `VERSION_CONFLICT`, `ASSET_STATUS_CONFLICT` or `ASSET_NOT_AVAILABLE`)
       content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
   schemas:
     Problem:
       type: object
+      required: [status, code, title, detail, instance, correlationId]
       properties:
         title: { type: string }
         status: { type: integer }
         code: { type: string }
         detail: { type: string }
+        instance: { type: string }
         correlationId: { type: string, format: uuid }
     MovementType:
       type: string
@@ -236,17 +826,237 @@ components:
       type: object
       properties:
         reason: { type: string }
-        stepUpToken: { type: string, description: Proof of recent privileged MFA step-up }
-    LocationRequest:
+    LocationType:
+      type: string
+      enum: [ALMACEN, PATIO, ZONA, PASILLO, RACK, NIVEL, POSICION, TALLER, RECEPCION, CUARENTENA, DESPACHO]
+    LocationCreateRequest:
       type: object
       required: [code, name, locationType]
+      additionalProperties: false
       properties:
+        code: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        locationType: { $ref: '#/components/schemas/LocationType' }
+        parentId: { type: string, format: uuid, nullable: true }
+    LocationUpdateRequest:
+      type: object
+      required: [name, locationType, parentId, expectedVersion]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        locationType: { $ref: '#/components/schemas/LocationType' }
+        parentId: { type: string, format: uuid, nullable: true }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    LocationVersionRequest:
+      type: object
+      required: [expectedVersion]
+      additionalProperties: false
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    LocationResponse:
+      type: object
+      required: [id, code, name, locationType, parentId, active, version]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
         code: { type: string }
         name: { type: string }
-        locationType:
+        locationType: { $ref: '#/components/schemas/LocationType' }
+        parentId: { type: string, format: uuid, nullable: true }
+        active: { type: boolean }
+        version: { type: integer, format: int64, minimum: 0 }
+    LotStatus:
+      type: string
+      enum: [ACTIVE, QUARANTINED, EXPIRED, DEPLETED, BLOCKED]
+    LotManualTargetStatus:
+      type: string
+      description: EXPIRED and DEPLETED are derived by the service and cannot be selected manually.
+      enum: [ACTIVE, QUARANTINED, BLOCKED]
+    LotCreateRequest:
+      type: object
+      required: [productId]
+      additionalProperties: false
+      properties:
+        productId: { type: string, format: uuid }
+        lotNumber: { type: string, minLength: 1, maxLength: 120, nullable: true }
+        heatNumber: { type: string, minLength: 1, maxLength: 120, nullable: true }
+        manufacturedAt: { type: string, format: date, nullable: true }
+        receivedAt: { type: string, format: date, nullable: true }
+        expiresAt: { type: string, format: date, nullable: true }
+    LotUpdateRequest:
+      type: object
+      required: [manufacturedAt, receivedAt, expiresAt, expectedVersion]
+      additionalProperties: false
+      properties:
+        manufacturedAt: { type: string, format: date, nullable: true }
+        receivedAt: { type: string, format: date, nullable: true }
+        expiresAt: { type: string, format: date, nullable: true }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    LotStatusRequest:
+      type: object
+      required: [targetStatus, expectedVersion]
+      additionalProperties: false
+      properties:
+        targetStatus: { $ref: '#/components/schemas/LotManualTargetStatus' }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    LotResponse:
+      type: object
+      required: [id, productId, status, availableQuantity]
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        lotNumber: { type: string, nullable: true }
+        heatNumber: { type: string, nullable: true }
+        manufacturedAt: { type: string, format: date, nullable: true }
+        receivedAt: { type: string, format: date, nullable: true }
+        expiresAt: { type: string, format: date, nullable: true }
+        status: { $ref: '#/components/schemas/LotStatus' }
+        locationId:
           type: string
-          enum: [ALMACEN, PATIO, ZONA, PASILLO, RACK, NIVEL, POSICION, TALLER, RECEPCION, CUARENTENA, DESPACHO]
-        parentId: { type: string, format: uuid }
+          format: uuid
+          nullable: true
+          description: Present only when the request is scoped by locationId.
+        availableQuantity: { type: number, minimum: 0 }
+    LotPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/LotResponse' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    LotLocationQuantity:
+      type: object
+      required: [locationId, quantity]
+      additionalProperties: false
+      properties:
+        locationId: { type: string, format: uuid }
+        quantity: { type: number, minimum: 0 }
+    LotAdminResponse:
+      type: object
+      required: [id, productId, lotNumber, heatNumber, manufacturedAt, receivedAt, expiresAt, status, expired, totalQuantity, locations, version, createdAt, updatedAt]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        lotNumber: { type: string, nullable: true }
+        heatNumber: { type: string, nullable: true }
+        manufacturedAt: { type: string, format: date, nullable: true }
+        receivedAt: { type: string, format: date, nullable: true }
+        expiresAt: { type: string, format: date, nullable: true }
+        status: { $ref: '#/components/schemas/LotStatus' }
+        expired: { type: boolean, description: Derived from expiresAt and the current UTC date. }
+        totalQuantity: { type: number, minimum: 0, description: Derived aggregate from stock_balance. }
+        locations:
+          type: array
+          items: { $ref: '#/components/schemas/LotLocationQuantity' }
+        version: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LotAdminPage:
+      type: object
+      required: [content, page, size, totalElements]
+      additionalProperties: false
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/LotAdminResponse' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    AssetAvailability:
+      type: string
+      enum: [UNASSIGNED, IN_STOCK]
+    AssetOperationalStatus:
+      type: string
+      enum: [OPERATIVO, EN_MANTENIMIENTO, EN_TRANSITO, INOPERATIVO, FUERA_SERVICIO]
+    AssetManualTargetStatus:
+      type: string
+      description: EN_TRANSITO is reserved for a future asynchronous dispatch/receipt flow.
+      enum: [OPERATIVO, EN_MANTENIMIENTO, INOPERATIVO, FUERA_SERVICIO]
+    AssetCreateRequest:
+      type: object
+      required: [productId, assetCode, serialNumber, technicalSnapshot]
+      additionalProperties: false
+      properties:
+        productId: { type: string, format: uuid }
+        assetCode: { type: string, minLength: 1, maxLength: 80 }
+        serialNumber: { type: string, minLength: 1, maxLength: 160 }
+        brand: { type: string, minLength: 1, maxLength: 100, nullable: true }
+        model: { type: string, minLength: 1, maxLength: 100, nullable: true }
+        technicalSnapshot: { type: object, additionalProperties: true }
+    AssetUpdateRequest:
+      type: object
+      required: [brand, model, technicalSnapshot, expectedVersion]
+      additionalProperties: false
+      properties:
+        brand: { type: string, minLength: 1, maxLength: 100, nullable: true }
+        model: { type: string, minLength: 1, maxLength: 100, nullable: true }
+        technicalSnapshot: { type: object, additionalProperties: true }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    AssetStatusRequest:
+      type: object
+      required: [targetStatus, expectedVersion]
+      additionalProperties: false
+      properties:
+        targetStatus: { $ref: '#/components/schemas/AssetManualTargetStatus' }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    AssetResponse:
+      type: object
+      required: [id, productId, assetCode, serialNumber, operationalStatus, available]
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        assetCode: { type: string }
+        serialNumber: { type: string }
+        operationalStatus: { $ref: '#/components/schemas/AssetOperationalStatus' }
+        brand: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        locationId: { type: string, format: uuid, nullable: true }
+        lotId: { type: string, format: uuid, nullable: true }
+        available: { type: boolean }
+    AssetPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/AssetResponse' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    AssetAdminResponse:
+      type: object
+      required: [id, productId, assetCode, serialNumber, brand, model, operationalStatus, technicalSnapshot, currentLocationId, currentLotId, available, version, createdAt, updatedAt]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        assetCode: { type: string }
+        serialNumber: { type: string }
+        brand: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        operationalStatus: { $ref: '#/components/schemas/AssetOperationalStatus' }
+        technicalSnapshot: { type: object, additionalProperties: true }
+        currentLocationId: { type: string, format: uuid, nullable: true, description: Derived from the single positive stock balance. }
+        currentLotId: { type: string, format: uuid, nullable: true, description: Derived from the single positive stock balance. }
+        available: { type: boolean, description: True when a positive unit stock balance exists. }
+        version: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AssetAdminPage:
+      type: object
+      required: [content, page, size, totalElements]
+      additionalProperties: false
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/AssetAdminResponse' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
     StockItem:
       type: object
       properties:
@@ -266,35 +1076,86 @@ components:
         page: { type: integer }
         size: { type: integer }
         totalElements: { type: integer, format: int64 }
-    PhysicalCountLineRequest:
-      type: object
-      required: [productId, countedQuantity]
-      properties:
-        productId: { type: string, format: uuid }
-        lotId: { type: string, format: uuid }
-        assetId: { type: string, format: uuid }
-        countedQuantity: { type: number, minimum: 0 }
+    PhysicalCountStatus:
+      type: string
+      enum: [DRAFT, IN_PROGRESS, COMPLETED, CANCELLED]
     PhysicalCountRequest:
       type: object
-      required: [locationId, lines]
+      required: [locationId]
       properties:
         locationId: { type: string, format: uuid }
-        notes: { type: string }
-        lines:
-          type: array
-          minItems: 1
-          items: { $ref: '#/components/schemas/PhysicalCountLineRequest' }
-    PhysicalCountResponse:
+        notes: { type: string, maxLength: 2000 }
+    PhysicalCountLineUpdateRequest:
       type: object
+      required: [expectedVersion, countedQuantity]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        countedQuantity: { type: number, minimum: 0 }
+        notes: { type: string, maxLength: 2000 }
+    UnexpectedPhysicalCountLineRequest:
+      type: object
+      required: [expectedVersion, productId, countedQuantity]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        productId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid, nullable: true }
+        assetId: { type: string, format: uuid, nullable: true }
+        countedQuantity: { type: number, minimum: 0 }
+        notes: { type: string, maxLength: 2000 }
+    PhysicalCountCommandRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    PhysicalCountCancelRequest:
+      allOf:
+        - $ref: '#/components/schemas/PhysicalCountCommandRequest'
+        - type: object
+          required: [reason]
+          properties:
+            reason: { type: string, minLength: 1, maxLength: 255 }
+    PhysicalCountLineResponse:
+      type: object
+      required: [id, productId, systemQuantity]
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, enum: [DRAFT, IN_PROGRESS, COMPLETED, CANCELLED] }
-        differences:
+        productId: { type: string, format: uuid }
+        lotId: { type: string, format: uuid, nullable: true }
+        assetId: { type: string, format: uuid, nullable: true }
+        systemQuantity: { type: number, minimum: 0 }
+        countedQuantity: { type: number, minimum: 0, nullable: true }
+        differenceQuantity: { type: number, nullable: true, description: countedQuantity minus systemQuantity }
+        notes: { type: string, nullable: true }
+        countedByUserId: { type: string, format: uuid, nullable: true }
+        countedAt: { type: string, format: date-time, nullable: true }
+    PhysicalCountResponse:
+      type: object
+      required: [id, locationId, status, version, createdByUserId, createdAt, lines]
+      properties:
+        id: { type: string, format: uuid }
+        locationId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/PhysicalCountStatus' }
+        version: { type: integer, format: int64, minimum: 0 }
+        notes: { type: string, nullable: true }
+        createdByUserId: { type: string, format: uuid }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+        completedByUserId: { type: string, format: uuid, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        cancelledByUserId: { type: string, format: uuid, nullable: true }
+        cancellationReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lines:
           type: array
-          items:
-            type: object
-            properties:
-              productId: { type: string, format: uuid }
-              systemQuantity: { type: number }
-              countedQuantity: { type: number }
-              differenceQuantity: { type: number }
+          items: { $ref: '#/components/schemas/PhysicalCountLineResponse' }
+    PhysicalCountPage:
+      type: object
+      required: [content, page, size, totalElements]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/PhysicalCountResponse' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }

@@ -1,0 +1,58 @@
+server:
+  address: 127.0.0.1
+  port: ${INVENTORY_PORT:8083}
+spring:
+  application:
+    name: siga-inventory-service
+  datasource:
+    url: ${INVENTORY_DB_URL}
+    username: ${INVENTORY_DB_USER}
+    password: ${INVENTORY_DB_PASSWORD}
+  flyway:
+    schemas: inventory
+    default-schema: inventory
+    create-schemas: false
+    clean-disabled: true
+  rabbitmq:
+    host: ${INVENTORY_RABBIT_HOST:127.0.0.1}
+    port: ${INVENTORY_RABBIT_PORT:5672}
+    username: ${INVENTORY_RABBIT_USER}
+    password: ${INVENTORY_RABBIT_PASSWORD}
+    publisher-confirm-type: correlated
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+inventory:
+  evidence:
+    base-url: ${INVENTORY_EVIDENCE_URL:http://127.0.0.1:8084}
+    connect-timeout-ms: ${INVENTORY_EVIDENCE_CONNECT_TIMEOUT_MS:1000}
+    read-timeout-ms: ${INVENTORY_EVIDENCE_READ_TIMEOUT_MS:2000}
+  catalog:
+    consumer:
+      enabled: ${INVENTORY_CATALOG_CONSUMER_ENABLED:true}
+      exchange: ${INVENTORY_CATALOG_EXCHANGE:siga.events}
+      queue: ${INVENTORY_CATALOG_QUEUE:inventory.catalog.events.v1}
+      retry:
+        max-attempts: ${INVENTORY_CATALOG_RETRY_MAX_ATTEMPTS:3}
+        initial-interval-ms: ${INVENTORY_CATALOG_RETRY_INITIAL_MS:250}
+        multiplier: ${INVENTORY_CATALOG_RETRY_MULTIPLIER:2.0}
+        max-interval-ms: ${INVENTORY_CATALOG_RETRY_MAX_MS:2000}
+  outbox:
+    exchange: ${INVENTORY_OUTBOX_EXCHANGE:siga.events}
+    publisher:
+      initial-delay-ms: ${INVENTORY_OUTBOX_PUBLISHER_INITIAL_DELAY_MS:1000}
+      fixed-delay-ms: ${INVENTORY_OUTBOX_PUBLISHER_FIXED_DELAY_MS:1000}
+  security:
+    jwks-uri: ${INVENTORY_JWKS_URI:http://127.0.0.1:8081/.well-known/jwks.json}
+    issuer: ${INVENTORY_JWT_ISSUER:siga-identity}
+    audience: ${INVENTORY_JWT_AUDIENCE:siga-api}
