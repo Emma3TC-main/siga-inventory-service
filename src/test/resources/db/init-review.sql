@@ -1,0 +1,1 @@
+CREATE SCHEMA inventory AUTHORIZATION siga_inventory_review_test;
