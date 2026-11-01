@@ -29,6 +29,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import utp.siga.inventory.application.command.CreateMovementCommand;
 import utp.siga.inventory.application.dto.MovementPage;
+import utp.siga.inventory.application.query.MovementHistoryFilter;
 import utp.siga.inventory.application.usecase.DefaultMovementUseCase;
 import utp.siga.inventory.domain.model.Movement;
 import utp.siga.inventory.domain.model.MovementAuthorization;
@@ -238,7 +239,7 @@ class PostgresMovementRepositoryTest {
     }
 
     @Test
-    void listsMovementsAsARealPageAndLoadsDetailsInBatch() {
+    void listsMovementsAsARealSummaryPage() {
         PostgresMovementRepository repository = new PostgresMovementRepository(jdbc);
         Fixture firstFixture = fixture();
         Fixture secondFixture = fixture();
@@ -247,23 +248,26 @@ class PostgresMovementRepositoryTest {
         repository.save(first);
         repository.save(second);
 
-        MovementPage firstPage = new PostgresMovementQuery(jdbc).getMovements(0, 1);
-        MovementPage secondPage = new PostgresMovementQuery(jdbc).getMovements(1, 1);
+        MovementPage firstPage = new PostgresMovementQuery(jdbc).getMovements(filter(0, 1));
+        MovementPage secondPage = new PostgresMovementQuery(jdbc).getMovements(filter(1, 1));
 
         assertEquals(1, firstPage.content().size());
         assertEquals(1, secondPage.content().size());
         assertTrue(firstPage.totalElements() >= 2);
-        assertEquals(1, firstPage.content().getFirst().details().size());
-        assertEquals(1, secondPage.content().getFirst().details().size());
         assertFalse(firstPage.content().getFirst().id().equals(secondPage.content().getFirst().id()));
     }
 
     @Test
     void movementListRejectsInvalidPagination() {
         PostgresMovementQuery query = new PostgresMovementQuery(jdbc);
-        assertThrows(IllegalArgumentException.class, () -> query.getMovements(-1, 20));
-        assertThrows(IllegalArgumentException.class, () -> query.getMovements(0, 0));
-        assertThrows(IllegalArgumentException.class, () -> query.getMovements(0, 101));
+        assertThrows(IllegalArgumentException.class, () -> filter(-1, 20));
+        assertThrows(IllegalArgumentException.class, () -> filter(0, 0));
+        assertThrows(IllegalArgumentException.class, () -> filter(0, 101));
+    }
+
+    private MovementHistoryFilter filter(int page, int size) {
+        return new MovementHistoryFilter(page, size, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null);
     }
 
     @Test

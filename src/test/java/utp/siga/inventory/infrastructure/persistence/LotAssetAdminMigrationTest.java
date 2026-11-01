@@ -27,7 +27,7 @@ class LotAssetAdminMigrationTest {
 
     @Test
     void freshInstallAppliesV1ThroughV7() throws SQLException {
-        assertThat(flyway(null).migrate().migrationsExecuted).isEqualTo(7);
+        assertThat(flyway(MigrationVersion.fromVersion("7")).migrate().migrationsExecuted).isEqualTo(7);
         assertV7Shape();
     }
 
@@ -39,7 +39,7 @@ class LotAssetAdminMigrationTest {
         long stock = count("SELECT count(*) FROM inventory.stock_balance");
         long movements = count("SELECT count(*) FROM inventory.movement");
 
-        assertThat(flyway(null).migrate().migrationsExecuted).isOne();
+        assertThat(flyway(MigrationVersion.fromVersion("7")).migrate().migrationsExecuted).isOne();
 
         assertV7Shape();
         assertThat(count("SELECT count(*) FROM inventory.lot")).isEqualTo(lots);

@@ -3,7 +3,7 @@ package utp.siga.inventory.application.dto;
 import java.util.List;
 
 public record MovementPage(
-        List<MovementResponse> content,
+        List<MovementHistoryItem> content,
         int page,
         int size,
         long totalElements

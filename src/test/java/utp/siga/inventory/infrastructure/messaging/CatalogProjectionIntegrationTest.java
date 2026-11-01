@@ -52,7 +52,7 @@ class CatalogProjectionIntegrationTest extends InventoryIntegrationEnvironment {
     void migrationsAndImplementedQueriesMatchTheDedicatedDatabase() {
         assertEquals("siga_inventory_review_test", jdbc.queryForObject("SELECT current_database()", String.class));
         assertEquals("siga_inventory_review_test", jdbc.queryForObject("SELECT current_user", String.class));
-        assertEquals(7L, scalar("SELECT count(*) FROM inventory.flyway_schema_history WHERE success"));
+        assertEquals(8L, scalar("SELECT count(*) FROM inventory.flyway_schema_history WHERE success"));
 
         UUID productId = UUID.fromString("22000000-0000-0000-0000-000000000001");
         UUID locationId = UUID.fromString("30000000-0000-0000-0000-000000000003");

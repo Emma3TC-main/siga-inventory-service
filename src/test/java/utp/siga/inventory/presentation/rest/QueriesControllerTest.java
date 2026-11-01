@@ -99,7 +99,8 @@ class QueriesControllerTest {
     @WithMockUser(authorities = "INVENTORY_READ")
     void getMovementById() throws Exception {
         UUID id = UUID.randomUUID();
-        MovementResponse response = new MovementResponse(id, "MOV-001", "ENTRY", "CONFIRMED", UUID.randomUUID(), null, null, null, null, null, null, false, null, List.of(), null, null, null);
+        MovementResponse response = new MovementResponse(id, "MOV-001", "ENTRY", "CONFIRMED", UUID.randomUUID(), null,
+                null, null, null, null, null, null, null, null, false, null, List.of(), null, null, null);
 
         Mockito.when(getMovementQuery.getMovement(id)).thenReturn(Optional.of(response));
 

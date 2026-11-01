@@ -8,5 +8,5 @@ import utp.siga.inventory.application.dto.MovementResponse;
 public interface GetMovementQuery {
     Optional<MovementResponse> getMovement(UUID id);
 
-    MovementPage getMovements(int page, int size);
+    MovementPage getMovements(MovementHistoryFilter filter);
 }

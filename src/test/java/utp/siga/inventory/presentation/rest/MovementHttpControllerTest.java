@@ -42,6 +42,7 @@ import utp.siga.inventory.application.dto.MovementPage;
 import utp.siga.inventory.application.dto.MovementResponse;
 import utp.siga.inventory.application.port.in.MovementUseCase;
 import utp.siga.inventory.application.query.GetMovementQuery;
+import utp.siga.inventory.application.query.MovementHistoryFilter;
 import utp.siga.inventory.domain.exception.InvalidMovementStateException;
 import utp.siga.inventory.domain.model.Movement;
 import utp.siga.inventory.domain.model.MovementDetail;
@@ -74,7 +75,7 @@ class MovementHttpControllerTest {
 
     @Test
     void listsAnEmptyPaginatedHistoryAndRequiresAuthentication() throws Exception {
-        when(query.getMovements(2, 5)).thenReturn(new MovementPage(List.of(), 2, 5, 0));
+        when(query.getMovements(any())).thenReturn(new MovementPage(List.of(), 2, 5, 0));
 
         mvc.perform(get("/api/v1/movements").param("page", "2").param("size", "5"))
                 .andExpect(status().isUnauthorized())
@@ -86,16 +87,100 @@ class MovementHttpControllerTest {
                 .andExpect(jsonPath("$.page").value(2))
                 .andExpect(jsonPath("$.size").value(5))
                 .andExpect(jsonPath("$.totalElements").value(0));
-        verify(query).getMovements(2, 5);
+        ArgumentCaptor<MovementHistoryFilter> filter = ArgumentCaptor.forClass(MovementHistoryFilter.class);
+        verify(query).getMovements(filter.capture());
+        assertThat(filter.getValue().page()).isEqualTo(2);
+        assertThat(filter.getValue().size()).isEqualTo(5);
     }
 
     @Test
     void movementListRejectsInvalidPaginationAsProblemDetails() throws Exception {
-        when(query.getMovements(-1, 20)).thenThrow(new IllegalArgumentException("invalid page"));
         mvc.perform(get("/api/v1/movements").param("page", "-1")
                         .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        mvc.perform(get("/api/v1/movements").param("size", "101")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void movementListUsesCanonicalPaginationDefaults() throws Exception {
+        when(query.getMovements(any())).thenReturn(new MovementPage(List.of(), 0, 20, 0));
+        mvc.perform(get("/api/v1/movements")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20));
+        ArgumentCaptor<MovementHistoryFilter> captured = ArgumentCaptor.forClass(MovementHistoryFilter.class);
+        verify(query).getMovements(captured.capture());
+        assertThat(captured.getValue().page()).isZero();
+        assertThat(captured.getValue().size()).isEqualTo(20);
+    }
+
+    @Test
+    void movementListBindsCanonicalFiltersAtApplicationBoundary() throws Exception {
+        UUID product = UUID.randomUUID(), lot = UUID.randomUUID(), asset = UUID.randomUUID();
+        UUID source = UUID.randomUUID(), destination = UUID.randomUUID(), location = UUID.randomUUID();
+        UUID registered = UUID.randomUUID(), requested = UUID.randomUUID();
+        when(query.getMovements(any())).thenReturn(new MovementPage(List.of(), 0, 20, 0));
+
+        mvc.perform(get("/api/v1/movements")
+                        .param("movementCode", "MOV-2026-00042").param("movementType", "TRANSFER")
+                        .param("status", "CONFIRMED").param("productId", product.toString())
+                        .param("lotId", lot.toString()).param("assetId", asset.toString())
+                        .param("sourceLocationId", source.toString())
+                        .param("destinationLocationId", destination.toString())
+                        .param("locationId", location.toString())
+                        .param("registeredByUserId", registered.toString())
+                        .param("requestedByUserId", requested.toString())
+                        .param("from", "2026-10-01T00:00:00-05:00")
+                        .param("to", "2026-11-01T00:00:00-05:00")
+                        .param("sensitive", "true").param("referenceDocNumber", "REF-42")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<MovementHistoryFilter> captured = ArgumentCaptor.forClass(MovementHistoryFilter.class);
+        verify(query).getMovements(captured.capture());
+        MovementHistoryFilter filter = captured.getValue();
+        assertThat(filter.productId()).isEqualTo(product);
+        assertThat(filter.lotId()).isEqualTo(lot);
+        assertThat(filter.assetId()).isEqualTo(asset);
+        assertThat(filter.sourceLocationId()).isEqualTo(source);
+        assertThat(filter.destinationLocationId()).isEqualTo(destination);
+        assertThat(filter.locationId()).isEqualTo(location);
+        assertThat(filter.registeredByUserId()).isEqualTo(registered);
+        assertThat(filter.requestedByUserId()).isEqualTo(requested);
+        assertThat(filter.from()).isEqualTo(Instant.parse("2026-10-01T05:00:00Z"));
+        assertThat(filter.to()).isEqualTo(Instant.parse("2026-11-01T05:00:00Z"));
+        assertThat(filter.sensitive()).isTrue();
+    }
+
+    @Test
+    void movementListRejectsMalformedUuidEnumDateAndInvertedRange() throws Exception {
+        var authorized = jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0);
+        mvc.perform(get("/api/v1/movements").param("productId", "not-a-uuid").with(authorized))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        mvc.perform(get("/api/v1/movements").param("movementType", "UNKNOWN")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        mvc.perform(get("/api/v1/movements").param("from", "2026-10-01")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        mvc.perform(get("/api/v1/movements").param("from", "2026-11-01T00:00:00Z")
+                        .param("to", "2026-10-01T00:00:00Z")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+    }
+
+    @Test
+    void movementListRejectsRepeatedScalarFilters() throws Exception {
+        mvc.perform(get("/api/v1/movements").param("status", "DRAFT", "CONFIRMED")
+                        .with(jwtWith(UUID.randomUUID(), "INVENTORY_READ", false, 0)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        verifyNoInteractions(query);
     }
 
     @Test
@@ -381,6 +466,6 @@ class MovementHttpControllerTest {
 
     private static MovementResponse response(UUID id, String type) {
         return new MovementResponse(id, "MOV-2026-00001", type, "DRAFT", UUID.randomUUID(), null,
-                null, null, null, null, null, false, null, List.of(), Instant.now(), null, null);
+                null, null, null, null, null, null, null, null, false, null, List.of(), Instant.now(), null, null);
     }
 }

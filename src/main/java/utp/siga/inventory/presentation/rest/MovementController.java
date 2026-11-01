@@ -10,7 +10,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -39,9 +41,11 @@ import utp.siga.inventory.application.dto.MovementPage;
 import utp.siga.inventory.application.dto.MovementResponse;
 import utp.siga.inventory.application.port.in.MovementUseCase;
 import utp.siga.inventory.application.query.GetMovementQuery;
+import utp.siga.inventory.application.query.MovementHistoryFilter;
 import utp.siga.inventory.domain.model.Movement;
 import utp.siga.inventory.domain.model.MovementDetail;
 import utp.siga.inventory.domain.model.MovementType;
+import utp.siga.inventory.domain.model.MovementStatus;
 import utp.siga.inventory.infrastructure.security.JwtAuthenticatedActorAdapter;
 import utp.siga.inventory.infrastructure.security.JwtStepUpValidator;
 import utp.siga.inventory.presentation.error.MovementNotFoundException;
@@ -50,6 +54,10 @@ import utp.siga.inventory.presentation.error.Problems;
 @RestController
 @RequestMapping("/api/v1/movements")
 public class MovementController {
+    private static final Set<String> HISTORY_QUERY_PARAMETERS = Set.of(
+            "page", "size", "movementCode", "movementType", "status", "productId", "lotId", "assetId",
+            "sourceLocationId", "destinationLocationId", "locationId", "registeredByUserId",
+            "requestedByUserId", "from", "to", "sensitive", "referenceDocNumber");
 
     private final GetMovementQuery query;
     private final MovementUseCase movements;
@@ -67,8 +75,38 @@ public class MovementController {
     @GetMapping
     public ResponseEntity<MovementPage> getMovements(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return ResponseEntity.ok(query.getMovements(page, size));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String movementCode,
+            @RequestParam(required = false) MovementType movementType,
+            @RequestParam(required = false) MovementStatus status,
+            @RequestParam(required = false) UUID productId,
+            @RequestParam(required = false) UUID lotId,
+            @RequestParam(required = false) UUID assetId,
+            @RequestParam(required = false) UUID sourceLocationId,
+            @RequestParam(required = false) UUID destinationLocationId,
+            @RequestParam(required = false) UUID locationId,
+            @RequestParam(required = false) UUID registeredByUserId,
+            @RequestParam(required = false) UUID requestedByUserId,
+            @RequestParam(required = false) OffsetDateTime from,
+            @RequestParam(required = false) OffsetDateTime to,
+            @RequestParam(required = false) Boolean sensitive,
+            @RequestParam(required = false) String referenceDocNumber,
+            HttpServletRequest httpRequest) {
+        rejectRepeatedHistoryParameters(httpRequest);
+        MovementHistoryFilter filter = new MovementHistoryFilter(page, size, movementCode, movementType, status,
+                productId, lotId, assetId, sourceLocationId, destinationLocationId, locationId,
+                registeredByUserId, requestedByUserId, from == null ? null : from.toInstant(),
+                to == null ? null : to.toInstant(), sensitive, referenceDocNumber);
+        return ResponseEntity.ok(query.getMovements(filter));
+    }
+
+    private void rejectRepeatedHistoryParameters(HttpServletRequest request) {
+        for (String parameter : HISTORY_QUERY_PARAMETERS) {
+            String[] values = request.getParameterValues(parameter);
+            if (values != null && values.length > 1) {
+                throw new IllegalArgumentException("Repeated query parameter is not supported: " + parameter);
+            }
+        }
     }
 
     @GetMapping("/{id}")
@@ -178,7 +216,8 @@ public class MovementController {
         return new MovementResponse(
                 movement.getId(), movement.getMovementCode(), movement.getType().name(),
                 movement.getStatus().name(), movement.getRegisteredByUserId(), movement.getRequestedByUserId(),
-                movement.getCostCenterCode(), movement.getCostCenterNameSnapshot(), movement.getSupplierId(),
+                movement.getCostCenterCode(), movement.getCostCenterNameSnapshot(), movement.getReferenceDocType(),
+                movement.getReferenceDocNumber(), movement.getReason(), movement.getSupplierId(),
                 movement.getSupplierNameSnapshot(), movement.getSupplierTaxIdSnapshot(), movement.isSensitive(),
                 movement.getSensitivityReason(), movement.getDetails().stream().map(MovementController::toResponse).toList(),
                 movement.getCreatedAt(), movement.getSubmittedAt(), movement.getConfirmedAt());
